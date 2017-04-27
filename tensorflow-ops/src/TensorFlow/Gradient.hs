@@ -653,6 +653,7 @@ opGrad "ZerosLike" _ _ _ = [Nothing]
 
 -- TODO(fmayle): These can go away if we properly prune the graph.
 opGrad "Const" _ _ _ = [Nothing, Nothing]
+opGrad "Concat" _ _ _ = [Nothing, Nothing, Nothing]
 opGrad "Placeholder" _ _ _ = []
 opGrad "Variable" _ _ _ = []
 
@@ -668,6 +669,7 @@ numOutputs o =
         "Add" -> 1
         "Cast" -> 1
         "Const" -> 1
+        "Concat" -> 3
         "Conv2D" -> 1
         "Div" -> 1
         "DynamicStitch" -> 1
