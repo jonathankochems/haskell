@@ -15,6 +15,7 @@ limitations under the License.
 
 #if TENSORFLOW_USE_SYCL
 
+#include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/sycl/sycl_device.h"
 
 namespace tensorflow {
@@ -39,7 +40,7 @@ public:
   }
 };
 
-REGISTER_LOCAL_DEVICE_FACTORY("SYCL", SYCLDeviceFactory);
+REGISTER_LOCAL_DEVICE_FACTORY("SYCL", SYCLDeviceFactory, 200);
 }
 
 #endif // TENSORFLOW_USE_SYCL

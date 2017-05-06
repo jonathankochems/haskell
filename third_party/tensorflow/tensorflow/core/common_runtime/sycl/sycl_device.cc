@@ -23,10 +23,48 @@ limitations under the License.
 
 namespace tensorflow {
 
+static std::unordered_set<SYCLDevice*> live_devices;
+static bool first_time = true;
+
+void ShutdownSycl() {
+  for (auto device : live_devices) {
+    device->EnterLameDuckMode();
+  }
+  live_devices.clear();
+}
+
+void SYCLDevice::RegisterDevice() {
+  if (first_time) {
+    first_time = false;
+    atexit(ShutdownSycl);
+  }
+  live_devices.insert(this);
+}
+
 SYCLDevice::~SYCLDevice() {
   device_context_->Unref();
-  delete sycl_allocator_;
-  delete sycl_device_;
+  sycl_allocator_->EnterLameDuckMode();
+  if (sycl_device_) {
+    sycl_device_->synchronize();
+    delete sycl_device_;
+  }
+  if (sycl_queue_) {
+    delete sycl_queue_;
+  }
+  live_devices.erase(this);
+}
+
+void SYCLDevice::EnterLameDuckMode() {
+  sycl_allocator_->EnterLameDuckMode();
+  if (sycl_device_) {
+    sycl_device_->synchronize();
+    delete sycl_device_;
+    sycl_device_ = nullptr;
+  }
+  if (sycl_queue_) {
+    delete sycl_queue_;
+    sycl_queue_ = nullptr;
+  }
 }
 
 void SYCLDevice::Compute(OpKernel *op_kernel, OpKernelContext *context) {
@@ -50,12 +88,8 @@ Allocator *SYCLDevice::GetAllocator(AllocatorAttributes attr) {
 Status SYCLDevice::MakeTensorFromProto(const TensorProto &tensor_proto,
                                        const AllocatorAttributes alloc_attrs,
                                        Tensor *tensor) {
-  AllocatorAttributes attr;
-  attr.set_on_host(true);
-  attr.set_gpu_compatible(true);
-  Allocator *host_alloc = GetAllocator(attr);
   Tensor parsed(tensor_proto.dtype());
-  if (!parsed.FromProto(host_alloc, tensor_proto)) {
+  if (!parsed.FromProto(cpu_allocator_, tensor_proto)) {
     return errors::InvalidArgument("Cannot parse tensor from proto: ",
                                    tensor_proto.DebugString());
   }
@@ -64,10 +98,8 @@ Status SYCLDevice::MakeTensorFromProto(const TensorProto &tensor_proto,
     *tensor = parsed;
   } else {
     Tensor copy(GetAllocator(alloc_attrs), parsed.dtype(), parsed.shape());
-    device_context_->CopyCPUTensorToDevice(&parsed, this, &copy,
-                                           [&status](const Status &s) {
-					       status = s;
-					   });
+    device_context_->CopyCPUTensorToDevice(
+        &parsed, this, &copy, [&status](const Status &s) { status = s; });
     *tensor = copy;
   }
   return status;
@@ -86,6 +118,15 @@ Status SYCLDevice::FillContextMap(const Graph *graph,
   return Status::OK();
 }
 
-} // namespace tensorflow
+Status SYCLDevice::Sync() {
+  sycl_device_->synchronize();
+  if (sycl_device_->ok()) {
+    return Status::OK();
+  } else {
+    return errors::Internal("Unknown error detected on device ", name());
+  }
+}
 
-#endif // TENSORFLOW_USE_SYCL
+}  // namespace tensorflow
+
+#endif  // TENSORFLOW_USE_SYCL

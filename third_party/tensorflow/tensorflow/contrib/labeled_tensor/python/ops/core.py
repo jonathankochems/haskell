@@ -279,7 +279,7 @@ class LabeledTensor(object):
     axes: lt.Axes containing axis names and coordinate labels.
   """
 
-  @tc.accepts(object, ops.Output,
+  @tc.accepts(object, ops.Tensor,
               tc.Union(Axes, tc.Collection(tc.Union(string_types, AxisLike))))
   def __init__(self, tensor, axes):
     """Construct a LabeledTenor.
@@ -489,7 +489,7 @@ class LabeledTensor(object):
 # typecheck type abbreviations:
 # abbreviations for third-party types with very long reprs
 tc.register_type_abbreviation(tensor_shape.Dimension, 'tensorflow.Dimension')
-tc.register_type_abbreviation(ops.Output, 'tensorflow.Output')
+tc.register_type_abbreviation(ops.Tensor, 'tensorflow.Tensor')
 tc.register_type_abbreviation(dtypes.DType, 'tensorflow.DType')
 # core LabeledTensor types
 tc.register_type_abbreviation(Axis, 'labeled_tensor.Axis')
@@ -497,11 +497,11 @@ tc.register_type_abbreviation(Axes, 'labeled_tensor.Axes')
 tc.register_type_abbreviation(LabeledTensor, 'labeled_tensor.LabeledTensor')
 
 
-@tc.returns(ops.Output)
+@tc.returns(ops.Tensor)
 @tc.accepts(LabeledTensor)
 def _convert_labeled_tensor_to_tensor(value, *args, **kwargs):
   # call ops.convert_to_tensor to handle optional arguments appropriately
-  return ops.convert_to_tensor(value.tensor, *args, **kwargs)
+  return ops.internal_convert_to_tensor(value.tensor, *args, **kwargs)
 
 
 ops.register_tensor_conversion_function(
@@ -510,7 +510,7 @@ ops.register_tensor_conversion_function(
 
 # tc class for anything that can be coerced into a LabeledTensor
 # pylint: disable=invalid-name
-LabeledTensorLike = tc.Union(LabeledTensor, ops.Output, np.ndarray, Scalar)
+LabeledTensorLike = tc.Union(LabeledTensor, ops.Tensor, np.ndarray, Scalar)
 # pylint: enable=invalid-name
 
 
@@ -1096,7 +1096,7 @@ def define_unary_op(op_name, elementwise_function):
 
 
 abs_function = define_unary_op('abs', math_ops.abs)
-neg = define_unary_op('neg', math_ops.neg)
+neg = define_unary_op('neg', math_ops.negative)
 sign = define_unary_op('sign', math_ops.sign)
 reciprocal = define_unary_op('reciprocal', math_ops.reciprocal)
 square = define_unary_op('square', math_ops.square)
@@ -1171,8 +1171,8 @@ def define_binary_op(op_name, elementwise_function):
 
 
 add = define_binary_op('add', math_ops.add)
-sub = define_binary_op('sub', math_ops.sub)
-mul = define_binary_op('mul', math_ops.mul)
+sub = define_binary_op('sub', math_ops.subtract)
+mul = define_binary_op('mul', math_ops.multiply)
 div = define_binary_op('div', math_ops.div)
 mod = define_binary_op('mod', math_ops.mod)
 pow_function = define_binary_op('pow', math_ops.pow)
