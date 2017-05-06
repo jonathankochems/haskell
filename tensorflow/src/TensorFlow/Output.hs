@@ -22,8 +22,6 @@ module TensorFlow.Output
     , Device(..)
     -- * Ops
     , NodeName(..)
-    , Op(..)
-    , opUnrendered
     , OpDef(..)
     , opName
     , opType
@@ -34,28 +32,23 @@ module TensorFlow.Output
     , OutputIx(..)
     , Output(..)
     , output
-    , outputIndex
-    , outputOp
     , PendingNodeName(..)
-    , ResourceHandle(..)
     )  where
 
 import qualified Data.Map.Strict as Map
-import Data.ProtoLens.TextFormat (showMessage)
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Lens.Family2 (Lens', Traversal', (.~), (&), (^.))
+import Lens.Family2 (Lens')
 import Lens.Family2.Unchecked (lens)
 import Proto.Tensorflow.Core.Framework.AttrValue (AttrValue(..))
-import Proto.Tensorflow.Core.Framework.NodeDef (NodeDef(..), name)
 import Data.Default (def)
 import TensorFlow.Types (Attribute, attrLens)
 import TensorFlow.Orphans ()
 
 -- | A type of graph node which has no outputs. These nodes are
 -- valuable for causing side effects when they are run.
-newtype ControlNode = ControlNode { unControlNode :: Op }
+newtype ControlNode = ControlNode { unControlNode :: NodeName }
 
 -- | The type of op of a node in the graph.  This corresponds to the proto field
 -- NodeDef.op.
@@ -66,17 +59,11 @@ instance IsString OpType where
     fromString = OpType . Text.pack
 
 -- | An output of a TensorFlow node.
-data Output = Output !OutputIx !Op
+data Output = Output {outputIndex :: !OutputIx, outputNodeName :: !NodeName}
     deriving (Eq, Ord, Show)
 
-output :: OutputIx -> Op -> Output
+output :: OutputIx -> NodeName -> Output
 output = Output
-
-outputOp :: Lens' Output Op
-outputOp = lens (\(Output _ o) -> o) (\(Output i _) o -> Output i o)
-
-outputIndex :: Lens' Output OutputIx
-outputIndex = lens (\(Output i _) -> i) (\(Output _ o) i -> Output i o)
 
 newtype OutputIx = OutputIx { unOutputIx :: Int }
     deriving (Eq, Ord, Num, Enum, Show)
@@ -89,25 +76,6 @@ newtype Device = Device {deviceName :: Text}
 
 instance Show Device where
     show (Device d) = show d
-
--- | The representation of a node in a TensorFlow graph.
-data Op
-    = Rendered !NodeDef  -- ^ Properties are fixed, including the
-                         -- device, name, and scope.
-    | Unrendered !OpDef  -- ^ Properties are not fixed, and may change depending
-                         -- on which context this op is rendered in.
-    deriving (Eq, Ord)
-
-instance Show Op where
-    show (Rendered n) = "Rendered " ++ showMessage n
-    show (Unrendered o) = "Unrendered " ++ show (o ^. opName)
-
--- | Traverse on the 'Unrendered' of an 'Op'.
---
--- Same implementation as _Left.
-opUnrendered :: Traversal' Op OpDef
-opUnrendered f (Unrendered a) = Unrendered <$> f a
-opUnrendered _ (Rendered b) = pure (Rendered b)
 
 -- | Op definition. This corresponds somewhat to the 'NodeDef' proto.
 data OpDef = OpDef
@@ -123,6 +91,9 @@ data OpDef = OpDef
 -- unique identifier.  Does not contain the "scope" prefix.
 data PendingNodeName = ExplicitName !Text | ImplicitName
     deriving (Eq, Ord, Show)
+
+instance IsString PendingNodeName where
+    fromString = ExplicitName . fromString
 
 -- | The name of a node in the graph.  This corresponds to the proto field
 -- NodeDef.name.  Includes the scope prefix (if any) and a unique identifier
@@ -154,10 +125,4 @@ instance IsString Output where
         (n, ':':ixStr) | [(ix, "" :: String)] <- read ixStr
                          -> Output (fromInteger ix) $ assigned n
         _ -> Output 0 $ assigned s
-        where assigned n = Rendered $ def & name .~ Text.pack n
-
-
--- | Opaque handle to a mutable resource in the graph.  Typical such
--- resources are variables. The type parameter corresponds to the
--- dtype of the tensor held in the variable.
-newtype ResourceHandle a = ResourceHandle Output
+     where assigned = NodeName . Text.pack

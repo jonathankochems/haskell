@@ -23,8 +23,7 @@ module TensorFlow.NN
 import Prelude hiding           ( log
                                 , exp
                                 )
-import TensorFlow.Build         ( Build
-                                , render
+import TensorFlow.Build         ( MonadBuild
                                 , withNameScope
                                 )
 import TensorFlow.GenOps.Core   ( greaterEqual
@@ -33,6 +32,7 @@ import TensorFlow.GenOps.Core   ( greaterEqual
                                 , exp
                                 )
 import TensorFlow.Tensor        ( Tensor(..)
+                                , render
                                 , Value
                                 )
 import TensorFlow.Types         ( TensorType(..)
@@ -40,6 +40,8 @@ import TensorFlow.Types         ( TensorType(..)
                                 )
 import TensorFlow.Ops           ( zerosLike
                                 , add
+                                , mul
+                                , neg
                                 )
 
 -- | Computes sigmoid cross entropy given `logits`.
@@ -71,18 +73,16 @@ import TensorFlow.Ops           ( zerosLike
 --
 --  `logits` and `targets` must have the same type and shape.
 sigmoidCrossEntropyWithLogits
-  :: (OneOf '[Float, Double] a, TensorType a, Num a)
+  :: (MonadBuild m, OneOf '[Float, Double] a, TensorType a, Num a)
      => Tensor Value a          -- ^ __logits__
      -> Tensor Value a          -- ^ __targets__
-     -> Build (Tensor Value a)
+     -> m (Tensor Value a)
 sigmoidCrossEntropyWithLogits logits targets = do
-    logits' <- render logits
-    targets' <- render targets
-    let zeros = zerosLike logits'
-        cond = logits' `greaterEqual` zeros
-        relu_logits = select cond logits' zeros
-        neg_abs_logits = select cond (-logits') logits'
+    let zeros = zerosLike logits
+        cond = logits `greaterEqual` zeros
+        relu_logits = select cond logits zeros
+        neg_abs_logits = select cond (neg logits) logits
     withNameScope "logistic_loss" $ do
-        left  <- render $ relu_logits - logits' * targets'
+        left <- render $ relu_logits - logits `mul` targets
         right <- render $ log (1 + exp neg_abs_logits)
         withNameScope "sigmoid_add" $ render $ left `add` right

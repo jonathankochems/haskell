@@ -19,6 +19,7 @@
 -- | Tests for EmbeddingOps.
 module Main where
 
+import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int32, Int64)
 import Data.List (genericLength)
 import Google.Test (googleTest)
@@ -39,11 +40,6 @@ import qualified TensorFlow.Tensor as TF
 import qualified TensorFlow.Types as TF
 import qualified TensorFlow.Gradient as TF
 import qualified TensorFlow.Build as TF
-import qualified TensorFlow.Nodes as TF
-
-
-buildAndRun :: TF.Fetchable t a => TF.Build t -> IO a
-buildAndRun = TF.runSession . TF.buildAnd TF.run
 
 
 -- | Tries to perform a simple embedding lookup, with two partitions.
@@ -53,17 +49,16 @@ testEmbeddingLookupHasRightShapeWithPartition =
     let embShape     = TF.Shape [1, 3] -- Consider a 3-dim embedding of two items.
     let embedding1  = [1, 1, 1 :: Int32]
     let embedding2  = [0, 0, 0 :: Int32]
-    let embedding   = [ TF.constant embShape embedding1
-                      , TF.constant embShape embedding2
-                      ]
 
     let idValues  = [0, 1 :: Int32]
-    let ids       = TF.constant (TF.Shape [1, 2]) idValues
-    let op        = embeddingLookup embedding ids
 
-    (values, shape) <- buildAndRun $ do
-        vs <- op
-        return (vs, TF.shape vs)
+    (values, shape) <- TF.runSession $ do
+        embedding   <- mapM TF.render [ TF.constant embShape embedding1
+                        , TF.constant embShape embedding2
+                        ]
+        let ids     = TF.constant (TF.Shape [1, 2]) idValues
+        vs          <- embeddingLookup embedding ids
+        TF.run (vs, TF.shape vs)
 
     -- This is the shape that is returned in the equiv. Python.
     shape  @=? V.fromList [1, 2, 3]
@@ -82,21 +77,19 @@ testEmbeddingLookupHasRightShape =
                         , 0, 0, 0 :: Int32
                         ]
 
-    let embedding = TF.constant embShape embeddingInit
     let idValues  = [0, 1 :: Int32]
-    let ids       = TF.constant (TF.Shape [1, 2]) idValues
-    let op        = embeddingLookup [embedding] ids
 
-    (values, shape) <- buildAndRun $ do
-        vs <- op
-        return (vs, TF.shape vs)
+    (values, shape) <- TF.runSession $ do
+        embedding <- TF.render $ TF.constant embShape embeddingInit
+        let ids = TF.constant (TF.Shape [1, 2]) idValues
+        vs <- embeddingLookup [embedding] ids
+        TF.run (vs, TF.shape vs)
 
     -- This is the shape that is returned in the equiv. Python.
     shape  @=? V.fromList [1, 2, 3]
 
     -- "[0, 1]" should pull out the resulting vector.
     values @=? V.fromList [1, 1, 1, 0, 0, 0]
-
 
 -- | Check that we can calculate gradients w.r.t embeddings.
 testEmbeddingLookupGradients :: Test
@@ -106,7 +99,6 @@ testEmbeddingLookupGradients = testCase "testEmbeddingLookupGradients" $ do
     let shape = TF.Shape [2]
 
     gs <- TF.runSession $ do
-        grads <- TF.build $ do
             let embShape      = TF.Shape [2, 1]
             let embeddingInit = [1, 20 ::Float]
             let idValues      = [1, 1 :: Int32]
@@ -114,16 +106,16 @@ testEmbeddingLookupGradients = testCase "testEmbeddingLookupGradients" $ do
 
             x <- TF.placeholder (TF.Shape [2])
             embedding <- TF.initializedVariable
-                            =<< TF.render (TF.constant embShape embeddingInit)
+                            (TF.constant embShape embeddingInit)
 
             op <- embeddingLookup [embedding] ids
-            let twoNorm = CoreOps.square $ TF.abs (op - x)
+            let twoNorm = CoreOps.square $ TF.abs (op `TF.sub` x)
                 loss    = TF.mean twoNorm (TF.scalar (0 :: Int32))
 
             grad <- fmap head (TF.gradients loss [embedding])
-            return $ \xs -> TF.runWithFeeds [TF.feed x xs] grad
-
-        grads (TF.encodeTensorData shape xVals :: TF.TensorData Float)
+            TF.runWithFeeds
+                [TF.feed x $ TF.encodeTensorData shape xVals]
+                grad
     -- Gradients should be zero (or close)
     assertAllClose gs (V.fromList ([0, 0 :: Float]))
 
@@ -137,23 +129,21 @@ testEmbeddingLookupUndoesSplit
     (LookupExample numParts
                    shape@(TF.Shape (firstDim : restDims))
                    values
-                   indices) =
-    let modShardedValues :: [TF.Tensor TF.Value a] =
-            CoreOps.dynamicPartition numParts shapedValues cyclicCounter
-        cyclicCounter :: TF.Tensor TF.Value Int32 =
+                   indices) = monadicIO $ run $ TF.runSession $ do
+    let shapedValues = TF.constant shape values
+    indicesVector <- TF.render $ TF.vector indices
+    let directs = CoreOps.gather shapedValues indicesVector
+    let cyclicCounter :: TF.Tensor TF.Build Int32 =
             TF.vector [0..fromIntegral firstDim-1]
             `CoreOps.mod` fromIntegral numParts
-        indicesVector = TF.vector indices
-        directs = CoreOps.gather shapedValues indicesVector
-        shapedValues = TF.constant shape values
-    in monadicIO $ run $ do
-       (shapeOut, got, want :: V.Vector a) <-
-           TF.runSession $ TF.buildAnd TF.run $ do
-               embeddings <- embeddingLookup modShardedValues indicesVector
-               return (TF.cast (TF.shape embeddings), embeddings, directs)
-       -- Checks the explicitly documented invariant of embeddingLookup.
-       shapeOut @=? V.fromList (genericLength indices : restDims)
-       got @=? want
+    modShardedValues :: [TF.Tensor TF.Value a] <-
+            mapM TF.render $ CoreOps.dynamicPartition numParts shapedValues cyclicCounter
+    embeddings <- embeddingLookup modShardedValues indicesVector
+    (shapeOut, got, want :: V.Vector a) <-
+            TF.run (TF.cast (TF.shape embeddings), embeddings, directs)
+    -- Checks the explicitly documented invariant of embeddingLookup.
+    liftIO $ shapeOut @=? V.fromList (genericLength indices : restDims)
+    liftIO $ got @=? want
 testEmbeddingLookupUndoesSplit _ = error "Bug in Arbitrary (LookupExample)"
 
 -- | Consistent set of parameters for EmbeddingLookupUndoesSplit.

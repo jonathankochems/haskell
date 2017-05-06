@@ -12,6 +12,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -32,15 +33,14 @@ where:
  (for example: 'TensorType' or 'OneOf').
 
 * @{input tensors}@ is of the form @T_1 -> ... -> T_N@, where each @T@ is of
-the form @Tensor Ref a@, @Tensor v a@ or @ResourceHandle a@ (or a list of one
-of those types), and @a@ is either a concrete type or a (constrained) type
-variable.
+the form @Tensor Ref a@ or @Tensor v a@ (or a list of one of those types),
+and @a@ is either a concrete type or a (constrained) type variable.
 
 * @{output tensors}@ is of the form @(T_1,...,T_N)@ for "pure" ops, and
 @Build (T_1,...,T_N)@ for "stateful" ops.  An op is considered "stateful" if
-it takes a @Tensor Ref@ or @ResourceHandle@ as input, or if it's explicitly
-marked \"Stateful\" in its @REGISTER_OP@ definition.  (If there are no outputs,
-it is either @ControlNode@ or @Build ControlNode@.)
+it takes a @Tensor Ref@ or @Tensor v ResourceHandle@ as input, or if it's
+explicitly marked \"Stateful\" in its @REGISTER_OP@ definition.  (If there
+are no outputs, it is either @ControlNode@ or @Build ControlNode@.)
 -}
 
 module TensorFlow.OpGen
@@ -52,6 +52,7 @@ module TensorFlow.OpGen
 import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
 import Data.ProtoLens (def, showMessage)
+import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NE
 import Lens.Family2 ((^.), (.~), (&), view)
@@ -131,6 +132,7 @@ docOpList flags opList =
         , empty
         , folddoc (\x y -> x </> empty </> y)
                   (map renderOpAndExtras $
+                   sortOn (view name) $
                    filter (not . flip elem exclusions . view name) $
                    toList $ opList ^. op)
         ]
@@ -147,11 +149,11 @@ imports = stack [
       "import Data.ByteString (ByteString)"
     , "import Data.Complex (Complex)"
     , "import Data.Int (Int8, Int16, Int32, Int64)"
+    , "import Data.Proxy (Proxy(Proxy))"
     , "import Data.Word (Word8, Word16)"
     , "import Lens.Family2 ((.~), (&))"
     , "import TensorFlow.Build"
     , "import TensorFlow.BuildOp"
-    , "import TensorFlow.Output (ResourceHandle)"
     , "import TensorFlow.Tensor"
     , "import TensorFlow.Types"
     ]
@@ -171,18 +173,28 @@ renderQuotedTFName = dquotes . renderTFName
 renderOp :: ParsedOp -> Doc
 renderOp pOp = stack $
     [ haddocks
-    , n <+> "::" <+> hang 0 (typeSig pOp)
-    , n <+> hang 0 args <+> "|" <+> funcGuard listSizeAttrs
+    -- Prevent unreasonably long compilation times on ghc-7.10, due
+    -- to stack calling "-dump-hi" which (unnecessarily) includes the
+    -- inlining information, and is large for ops with many arguments.
+#if __GLASGOW_HASKELL__ < 800
+    , "{-# NOINLINE" <+> n <+> "#-}"
+#endif
+    , n <+> "::" <+> hang 0 (typeSig empty pOp)
+    , n <+> "=" <+> n <> "' id"
+    , n' <+> "::" <+> hang 0 (typeSig "OpParams ->" pOp)
+    , n' <+> hang 0 args <+> "|" <+> funcGuard listSizeAttrs
                 <+> "=" </>  -- args are indented
                     -- the body needs to be indented wrt the name
                     indent indentation (functionBody pOp)
     ] ++ whereClause listSizeAttrs
   where
     n = renderHaskellName $ parsedOpName pOp
+    n' = n <> "'"
     listSizeAttrs = inferredListSizeAttrs pOp
-    args = sep $ map renderHaskellName
-               $ map attrName (explicitInputAttrs pOp)
-                ++ map parsedArgName (parsedInputs pOp)
+    args = sep $ "op'options"
+               : (map renderHaskellName
+                    $ map attrName (explicitInputAttrs pOp)
+                    ++ map parsedArgName (parsedInputs pOp))
     haddocks = "-- |" <+> multilineComment (parsedOpSummary pOp) (parsedOpDescription pOp)
 
 -- | A check that all lists of the given size have the given length.
@@ -210,28 +222,36 @@ whereClause :: [Attr (NonEmpty Name)] -> [Doc]
 whereClause [] = []
 whereClause as = [indent 2 $ "where" </> indent 2 (stack $ map defineLengthAttr as)]
   where
-    defineLengthAttr a = renderHaskellName (attrName a) <+> "="
+    defineLengthAttr a = renderHaskellAttrName a <+> "="
                             <+> "fromIntegral (length"
                             <+> renderHaskellName (NE.head $ attrInfo a)
                             <> ") :: Int64"
 
+renderHaskellAttrName :: Attr a -> Doc
+renderHaskellAttrName = renderHaskellName . attrName
+
 functionBody :: ParsedOp -> Doc
-functionBody pOp = buildFunction <+> parens (hang 0 (stack buildOpParts))
-                        </> indent indentation (sep tensorArgs)
+functionBody pOp
+    | parsedOpIsMonadic pOp
+        = "build $ do"
+            </> indent indentation (bindOpInputsVar
+                        </> "buildOp" <+> outputListsSizes <+> opDef)
+    | otherwise
+        = "pureOp" <+> outputListsSizes <+> "$ do"
+            </> indent indentation (bindOpInputsVar </> "return" <+> opDef)
   where
-    buildFunction
-        | null outputListsSizes = "buildOp"
-        | otherwise = "buildListOp" <+>
-                        brackets (commasep $
-                                    map renderHaskellName outputListsSizes)
-    outputListsSizes = [ a
-                       | ParsedArg { parsedArgCase = ListArg { argLength = a } }
-                            <- parsedOutputs pOp]
-    buildOpParts =
+    outputListsSizes = brackets $ commasep
+        [ renderHaskellName a
+        | ParsedArg { parsedArgCase = ListArg { argLength = a } }
+            <- parsedOutputs pOp
+        ]
+    opInputsVar = "op'inputs"
+    bindOpInputsVar = opInputsVar <+> "<- fmap Prelude.concat $ Prelude.sequence"
+                            <+> brackets (commasep $ map (\a -> "buildInputs" <+> a) tensorArgs)
+    opDef = parens $ hang 0 $ stack $
         "opDef" <+> renderQuotedTFName (parsedOpName pOp) :
-        -- Renders tensor arguments.
-        [ "& opAttr" <+> renderQuotedTFName n <+>
-          ".~ tensorType (undefined ::" <+> renderHaskellName n <> ")"
+        -- Renders type parameter arguments.
+        [ "& opAttr" <+> renderQuotedTFName n <+> ".~" <+> inferredTypeExpr a
         | a <- inferredTypeAttrs pOp, let n = attrName a
         ] ++
         -- Renders mandatory attributes as function parameters.
@@ -241,9 +261,16 @@ functionBody pOp = buildFunction <+> parens (hang 0 (stack buildOpParts))
         -- Renders sizes of tensor list types having number_attr.
         [ "& opAttr" <+> renderQuotedTFName n <+> ".~" <+> renderHaskellName n
         | a <- inferredListSizeAttrs pOp, let n = attrName a
-        ]
-
-    tensorArgs = renderHaskellName . parsedArgName <$> parsedInputs pOp
+        ] ++
+        ["& op'options & opInputs .~" <+> opInputsVar]
+    tensorArgs = renderTensorArg <$> parsedInputs pOp
+    renderTensorArg = renderHaskellName . parsedArgName
+    inferredTypeExpr a
+        | typeParamIsList $ attrInfo a
+            = "fromTensorTypes (Proxy :: Proxy" <+> renderHaskellAttrName a
+                    <> ")"
+        | otherwise = "tensorType (undefined ::" <+> renderHaskellAttrName a
+                            <> ")"
 
 -- | Write a comment with the inputs/outputs/attributes in proto format, for
 -- debugging.
@@ -258,23 +285,28 @@ extras d = enclose "{-\n" "\n-}" $
 -- | The type signature for an op.
 -- Of the form:
 -- forall t1 t2 v1 v2 . (TensorType t1, TensorType t2)
---      => Float -> Tensor t1 v1 -> Tensor t2 v2
+--      => {pre} Float -> Tensor t1 v1 -> Tensor t2 v2
 -- where "Float" is an explicit input attribute, "Tensor t1 v1" is an input, and
 -- "Tensor t2 v2" is an output.
-typeSig :: ParsedOp -> Doc
-typeSig pOp = constraints
-            <+/> signatureFold (map attrInput (explicitInputAttrs pOp)
+typeSig :: Doc -> ParsedOp -> Doc
+typeSig pre pOp = constraints
+            <+/> pre </> signatureFold (map attrInput (explicitInputAttrs pOp)
                                 ++ map tensorArgAndComment (parsedInputs pOp)
                                 ++ [outputs])
   where
     constraints
-        | null (inferredTypeAttrs pOp) = empty
-        | otherwise = "forall" <+> sep typeParams <+> "." <+> classConstraints <+> "=>"
+        | null classConstraints = empty
+        | otherwise = "forall" <+> sep typeParams <+> "." <+> tuple classConstraints <+> "=>"
     typeParams = [strictText v | k <- parsedInputs pOp ++ parsedOutputs pOp,
-                  ArgTensorEither v <- [parsedArgKind k]]
-                ++ [renderHaskellName $ attrName n | n <- inferredTypeAttrs pOp]
-    classConstraints = tuple $ concatMap tensorArgConstraint
-                    $ inferredTypeAttrs pOp
+                  ArgSomeTensor v <- [argKind $ parsedArgCase k]]
+                ++ [renderHaskellAttrName n | n <- inferredTypeAttrs pOp]
+                ++ if parsedOpIsMonadic pOp then ["m'"] else []
+    -- Use m' as the type parameter to avoid clashing with an attribute name.
+    monadConstraint
+        | parsedOpIsMonadic pOp = ["MonadBuild m'"]
+        | otherwise = []
+    classConstraints = monadConstraint ++ map tensorArgConstraint
+                                                    (inferredTypeAttrs pOp)
     signatureFold = folddoc (\x y -> x </> "->" <+> y)
     attrInput a = renderAttrType (attrInfo a) <+> hang 0 ("-- ^" <+> attrComment a)
     renderAttrType (AttrSingle a) = renderAttrBaseType a
@@ -295,31 +327,32 @@ typeSig pOp = constraints
         [a] -> wrapOutput (tensorArg a) <+> "-- ^" <+> argComment a
         as -> wrapOutput (tuple (map tensorArg as)) <+/> resultComment as
     wrapOutput o
-        | parsedOpIsMonadic pOp = "Build" <+> parens o
+        | parsedOpIsMonadic pOp = "m'" <+> parens o
         | otherwise = o
-        
+
 -- | Render an op input or output.
--- For example: "Tensor Ref Int64", "Tensor v t", "ResourceHandle dtype"
+-- For example: "Tensor Ref Int64", "Tensor v t"
 tensorArg :: ParsedArg -> Doc
 tensorArg p = case parsedArgCase p of
-    SimpleArg { argType = t } -> tensorType t
-    ListArg { argType = t } -> brackets $ tensorType t
-    MixedListArg {} -> "{{{tensorArg: can't handle heterogeneous lists}}}"
+    SimpleArg { argType = t, argKind = k } -> tensorType t k
+    ListArg { argType = t, argKind = k } -> brackets $ tensorType t k
+    MixedListArg {argTypeAttr = t, argKind = k}
+        -> "TensorList" <+> parens (kind k) <+> renderHaskellName t
   where
-    tensorType t = let
-        v = case parsedArgKind p of
-                ArgTensorRef -> "Tensor Ref"
-                ArgTensorValue -> "Tensor Value"
-                ArgTensorEither v' -> "Tensor" <+> strictText v'
-                ArgResource -> "ResourceHandle"
+    kind k = case k of
+                ArgTensorRef -> "Ref"
+                ArgTensorValue -> "Value"
+                ArgTensorBuild -> "Build"
+                ArgSomeTensor v -> strictText v
+    tensorType t k = let
         a = case t of
                 ArgTypeFixed dt -> strictText $ dtTypeToHaskell dt
                 ArgTypeAttr n -> renderHaskellName n
-        in v <+> a
+        in "Tensor" <+> kind k <+> a
 
 attrComment :: Attr a -> Doc
 attrComment a = argComment' (attrName a) (attrDescription a)
-        
+
 argComment :: ParsedArg -> Doc
 argComment a = argComment' (parsedArgName a) (parsedArgDescription a)
 
@@ -333,7 +366,7 @@ bold n = "__" <> n <> "__"
 -- | Comment for the outputs of an op.
 -- For example:
 --   -- ^ (__output1__, __output2__)
---   -- 
+--   --
 --   -- * __output1__: description1
 --   --
 --   -- * __output2__: description2
@@ -347,18 +380,20 @@ resultComment os = stack $ flatten commentSummary : map commentDetails os
               ]
 
 -- | Constraints for a given type parameter.
--- E.g.: ["TensorType t"] or ["TensorType t", "OneOf [Int64, Float] t"]
-tensorArgConstraint :: Attr [DataType] -> [Doc]
-tensorArgConstraint a
-    = ("TensorType" <+> n
-        : if null typeList
-            then []
-            else ["OneOf" <+> "'" <> brackets (commasep typeList) <+> n])
+-- E.g.: "TensorType t" or "OneOf [Int64, Float] t"
+-- or "TensorTypes ts" or "OneOfs [..] ts".
+tensorArgConstraint :: Attr TypeParam -> Doc
+tensorArgConstraint a = case attrInfo a of
+    TypeParam False Nothing -> "TensorType" <+> n
+    TypeParam False (Just as) -> "OneOf" <+> typeList as <+> n
+    TypeParam True Nothing -> "TensorTypes" <+> n
+    TypeParam True (Just as) -> "OneOfs" <+> typeList as <+> n
   where
-    n = renderHaskellName $ attrName a
-    typeList = map strictText $
-                    Set.toList $ Set.fromList $
-                    map dtTypeToHaskell $ attrInfo a
+    n = renderHaskellAttrName a
+    -- Produces a type-level list, e.g.: '[Int32,Int64,Float]
+    typeList = ("'" <>) . brackets . commasep . map strictText .
+                    Set.toList . Set.fromList .
+                    map dtTypeToHaskell . toList
 
 -- NOTE: The cases of this function should be kept in sync with
 -- TensorFlow.Types.AllTensorTypes.
@@ -382,8 +417,7 @@ dtTypeToHaskell DT_STRING = "Data.ByteString.ByteString"
 dtTypeToHaskell DT_UINT16 = "Data.Word.Word16"
 dtTypeToHaskell DT_HALF = "Data.Word.Word16"  -- TODO(gnezdo): make unique
 dtTypeToHaskell DT_UINT8 = "Data.Word.Word8"
-dtTypeToHaskell DT_RESOURCE =
-    error "ResourceHandle must be prevented from getting here."
+dtTypeToHaskell DT_RESOURCE = "ResourceHandle"
 dtTypeToHaskell x =
     Text.pack $ "Unsupported type in dtTypeToHaskell: " ++ show x
 

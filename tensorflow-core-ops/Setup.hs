@@ -12,7 +12,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- | Generates the wrappers for Ops shipped with tensorflow_c.
+-- | Generates the wrappers for Ops shipped with tensorflow.
 module Main where
 
 import Distribution.Simple.BuildPaths (autogenModulesDir)
@@ -64,36 +64,6 @@ generatingOpsWrappers = hooks
                                       (prettyLazyText 80 $ docOpList flags x)
 
 blackList =
-    -- A few data flow ops take a list of heterogeneous
-    -- parameters which we don't support in general form.
-    [ "HashTable"
-    , "MutableDenseHashTable"
-    , "MutableHashTable"
-    , "MutableHashTableOfTensors"
-    , "QueueDequeue"
-    , "QueueDequeueMany"
-    , "QueueDequeueUpTo"
-    , "Stack"
-    , "TensorArray"
-    , "TensorArrayV2"
-      -- These should be possible to support by adding a bunch of
-      -- overloads with a variable number of tuple arguments.
-    , "Assert"
-    , "BarrierTakeMany"
-    , "Print"
-    , "QueueEnqueue"
-    , "QueueEnqueueMany"
-      -- Need list of types support.
-    , "DecodeCSV"
-    , "ParseExample"
-    , "ParseSingleSequenceExample"
-    , "RestoreV2"
-    , "Save"
-    , "SaveV2"
-    , "SaveSlices"
-    , "SymbolicGradient"
-    , "_ArrayToList"
-    , "_ListToArray"
-      -- Easy: support larger result tuples.
-    , "Skipgram"
+    [ -- Requires the "func" type:
+      "SymbolicGradient"
     ]

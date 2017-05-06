@@ -13,6 +13,7 @@
 -- limitations under the License.
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 import Data.Int (Int32)
@@ -35,12 +36,13 @@ import Proto.Tensorflow.Core.Framework.NodeDef (op)
 
 testGradientSimple :: Test
 testGradientSimple = testCase "testGradientSimple" $ do
-    let x = TF.scalar (3 :: Float)
-        b = TF.scalar (4 :: Float)
-        y = x*x + b
-        grads = TF.gradients y [x, b]
+    let grads = do
+                x <- TF.render $ TF.scalar (3 :: Float)
+                b <- TF.render $ TF.scalar (4 :: Float)
+                let y = x `TF.mul` x `TF.add` b
+                TF.gradients y [x, b]
     -- Assert that the gradients are right.
-    [dx, db] <- TF.runSession $ TF.buildAnd TF.run grads
+    [dx, db] <- TF.runSession $ grads >>= TF.run
     6 @=? TF.unScalar dx
     1 @=? TF.unScalar db
     -- Assert that the graph has the expected ops.
@@ -87,11 +89,12 @@ testGradientSimple = testCase "testGradientSimple" $ do
 
 testGradientDisconnected :: Test
 testGradientDisconnected = testCase "testGradientDisconnected" $ do
-    let x = TF.scalar (3 :: Float)
-        b = TF.scalar (4 :: Float)
-        grads = TF.gradients x [x, b]
+    let grads = do
+            x <- TF.render $ TF.scalar (3 :: Float)
+            b <- TF.render $ TF.scalar (4 :: Float)
+            TF.gradients x [x, b]
     -- Assert that the gradients are right.
-    [dx, db] <- TF.runSession $ TF.buildAnd TF.run grads
+    [dx, db] <- TF.runSession $ grads >>= TF.run
     1 @=? TF.unScalar dx
     0 @=? TF.unScalar db
     -- Assert that the graph has the expected ops.
@@ -113,11 +116,11 @@ testGradientDisconnected = testCase "testGradientDisconnected" $ do
 -- Test that identical "stateful" ops work with createGraph.
 testCreateGraphStateful :: Test
 testCreateGraphStateful = testCase "testCreateGraphStateful" $ do
-    [dx, dy] <- TF.runSession $ TF.buildAnd TF.run $ do
+    [dx, dy] <- TF.runSession $ do
         let shape = TF.constant (TF.Shape [1]) [1]
         x :: TF.Tensor TF.Value Float <- TF.truncatedNormal shape
         y :: TF.Tensor TF.Value Float <- TF.truncatedNormal shape
-        TF.gradients (x + y*3) [x, y]
+        TF.gradients (TF.expr x + TF.expr y * 3) [x, y] >>= TF.run
     -- If this test fails, it will likely be caused by an exception within
     -- `TF.gradients`. These asserts are extra.
     1 @=? TF.unScalar dx
@@ -127,11 +130,11 @@ testCreateGraphStateful = testCase "testCreateGraphStateful" $ do
 -- Test that name scopes work with createGraph.
 testCreateGraphNameScopes :: Test
 testCreateGraphNameScopes = testCase "testCreateGraphNameScopes" $ do
-    [dx] <- TF.runSession $ TF.buildAnd TF.run $ do
+    [dx] <- TF.runSession $ do
         let shape = TF.constant (TF.Shape [1]) [1]
         x :: TF.Tensor TF.Value Float <-
             TF.withNameScope "foo" (TF.truncatedNormal shape)
-        TF.gradients x [x]
+        TF.gradients x [x] >>= TF.run
     -- If this test fails, it will likely be caused by an exception within
     -- `TF.gradients`. This assert is extra.
     1 @=? TF.unScalar dx
@@ -140,20 +143,20 @@ testCreateGraphNameScopes = testCase "testCreateGraphNameScopes" $ do
 -- Test that createGraph can handle graphs with diamond shapes.
 testDiamond :: Test
 testDiamond = testCase "testDiamond" $ do
-    [dx] <- TF.runSession $ TF.buildAnd TF.run $ do
-        let x = TF.vector [1]
-            y = x*x
+    [dx] <- TF.runSession $ do
+        x <- TF.render $ TF.vector [1]
+        let y = x `TF.mul` x
             z = y*y
-        TF.gradients z [x]
+        TF.gradients z [x] >>= TF.run
     (4 :: Float) @=? TF.unScalar dx
 
 
 testMaxGradient :: Test
 testMaxGradient = testCase "testMaxGradient" $ do
-    [dx] <- TF.runSession $ TF.buildAnd TF.run $ do
-        let x = TF.vector [1, 2, 3, 0, 1 :: Float]
-            y = TF.max x (0 :: TF.Tensor TF.Value Int32)
-        TF.gradients y [x]
+    [dx] <- TF.runSession $ do
+        x <- TF.render $ TF.vector [1, 2, 3, 0, 1 :: Float]
+        let y = TF.max x (0 :: TF.Tensor TF.Build Int32)
+        TF.gradients y [x] >>= TF.run
     V.fromList [0, 0, 1, 0, 0 :: Float] @=? dx
 
 

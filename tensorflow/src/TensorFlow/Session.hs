@@ -26,9 +26,7 @@ module TensorFlow.Session (
     sessionTracer,
     runSession,
     runSessionWithOptions,
-    build,
-    buildAnd,
-    buildWithSummary,
+    MonadBuild(..),
     extend,
     addGraphDef,
     run,
@@ -39,19 +37,19 @@ module TensorFlow.Session (
     ) where
 
 import Control.Monad (forever, unless, void)
+import Control.Monad.Catch (MonadThrow, MonadCatch, MonadMask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT(..), ask, asks)
 import Data.ByteString (ByteString)
 import Data.Default (Default, def)
-import Data.Functor.Identity (runIdentity)
 import Data.Monoid ((<>))
 import Data.ProtoLens (showMessage)
 import Data.Set (Set)
 import Data.Text.Encoding (encodeUtf8)
 import Lens.Family2 (Lens', (^.), (&), (.~))
 import Lens.Family2.Unchecked (lens)
-import Proto.Tensorflow.Core.Framework.Graph (node)
+import Proto.Tensorflow.Core.Framework.Graph (GraphDef, node)
 import Proto.Tensorflow.Core.Protobuf.Config (ConfigProto)
 import TensorFlow.Build
 import TensorFlow.Nodes
@@ -77,7 +75,8 @@ data SessionState
 
 newtype Session a
     = Session (ReaderT SessionState (BuildT IO) a)
-    deriving (Functor, Applicative, Monad, MonadIO)
+    deriving (Functor, Applicative, Monad, MonadIO, MonadThrow, MonadCatch,
+              MonadMask)
 
 -- | Run 'Session' actions in a new TensorFlow session.
 runSession :: Session a -> IO a
@@ -123,18 +122,8 @@ runSessionWithOptions options (Session m) =
             FFI.setSessionTarget (options ^. sessionTarget) opt
             FFI.setSessionConfig (options ^. sessionConfig) opt
 
--- | Lift a 'Build' action into a 'Session', including any explicit op
--- renderings.
-build :: Build a -> Session a
-build = Session . lift . hoistBuildT (return . runIdentity)
-
--- | Lift a 'Build' action into a 'Session', including any explicit op
--- renderings. Returns the merged summary ops which can be used for
--- logging, see 'TensorFlow.Logging.build' for a convenient wrapper.
-buildWithSummary :: forall a . Build a -> Session (a, [SummaryTensor])
-buildWithSummary b = Session $ lift $ (,) <$> v <*> collectAllSummaries
-  where v :: BuildT IO a
-        v = hoistBuildT (return . runIdentity) b
+instance MonadBuild Session where
+    build = Session . lift . build
 
 -- | Add all pending rendered nodes to the TensorFlow graph and runs
 -- any pending initializers.
@@ -146,20 +135,13 @@ extend = do
     trace <- Session (asks tracer)
     nodesToExtend <- build flushNodeBuffer
     unless (null nodesToExtend) $ liftIO $ do
-        let graphDef = def & node .~ nodesToExtend
+        let graphDef = (def :: GraphDef) & node .~ nodesToExtend
         trace ("Session.extend " <> Builder.string8 (showMessage graphDef))
         FFI.extendGraph session graphDef
     -- Now that all the nodes are created, run the initializers.
     initializers <- build flushInitializers
     unless (null initializers) $
         void $ liftIO $ FFI.run session [] [] (toNodeNames initializers)
-
--- | Helper combinator for doing something with the result of a 'Build' action.
--- Example usage:
---
--- > buildAnd run :: Fetchable t a => Build t -> Session a
-buildAnd :: (a -> Session b) -> Build a -> Session b
-buildAnd f m = build m >>= f
 
 -- | Run a subgraph 't', rendering any dependent nodes that aren't already
 -- rendered, and fetch the corresponding values for 'a'.
@@ -181,7 +163,7 @@ runWithFeeds feeds t = do
 runFetchWithFeeds :: [Feed] -> Set NodeName -> Fetch a -> Session a
 runFetchWithFeeds feeds target (Fetch fetch restore) = do
     extend
-    feeds' <- build $ fixFeeds feeds
+    let feeds' = fixFeeds feeds
     let fetchNames = encodeUtf8 <$> Set.toList fetch
         targetNames = toNodeNames $ Set.toList target
     session <- Session (asks rawSession)
@@ -210,8 +192,8 @@ runWithFeeds_ feeds t = do
     ns <- build $ getNodes t
     runFetchWithFeeds feeds ns (pure ())
 
-fixFeeds :: [Feed] -> Build [(ByteString, FFI.TensorData)]
-fixFeeds = mapM $ \(Feed o d) -> (,d) . encodeUtf8 <$> renderOutput o
+fixFeeds :: [Feed] -> [(ByteString, FFI.TensorData)]
+fixFeeds = map $ \(Feed o d) -> (encodeUtf8 $ encodeOutput o, d)
 
 -- | Starts a concurrent thread which evaluates the given Nodes
 -- forever until runSession exits or an exception occurs. Graph
