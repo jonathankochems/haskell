@@ -159,6 +159,22 @@ testMaxGradient = testCase "testMaxGradient" $ do
         TF.gradients y [x] >>= TF.run
     V.fromList [0, 0, 1, 0, 0 :: Float] @=? dx
 
+testConcatGradient :: Test
+testConcatGradient = testCase "testConcatGradient" $ do
+    [dv,dv'] <- TF.runSession $ do
+        v  <- TF.render $ TF.vector [1 :: Float]
+        v' <- TF.render $ TF.vector [2 :: Float]
+        let y = TF.concat (TF.scalar 0) [ v, v' ]
+        TF.gradients y [v,v'] >>= TF.run
+    V.fromList [1 :: Float] @=? dv    
+    V.fromList [1 :: Float] @=? dv'
+    [dv,dv'] <- TF.runSession $ do
+        v  <- TF.render $ TF.vector [1,2,3,4 :: Float]
+        v' <- TF.render $ TF.vector [5,6,7,8 :: Float]
+        let y = TF.concat (TF.scalar 0) [ v, v', v ]
+        TF.gradients y [v,v'] >>= TF.run
+    V.fromList [2,2,2,2 :: Float] @=? dv    
+    V.fromList [1,1,1,1 :: Float] @=? dv'
 
 main :: IO ()
 main = googleTest [ testGradientSimple
@@ -167,4 +183,5 @@ main = googleTest [ testGradientSimple
                   , testCreateGraphNameScopes
                   , testDiamond
                   , testMaxGradient
+                  , testConcatGradient
                   ]

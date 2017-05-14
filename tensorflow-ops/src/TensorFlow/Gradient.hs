@@ -440,6 +440,10 @@ opGrad "Abs" _ [toT -> x] [dz] = [Just $ expr dz * signum x]
 opGrad "Neg" _ [_] [dz] = [Just $ negate $ expr dz]
 opGrad "Relu" _ [toT -> x] [dz] = [Just $ reluGrad dz x]
 
+opGrad "Concat" nodedef inputs dzs
+  = [Nothing] ++ map (Just . _inputGrad) (tail inputs)
+   where _inputGrad (toT -> x) = CoreOps.exp $ zerosLike x
+
 opGrad "Square" _ [toT -> x] [dz] =
     -- TODO(fmayle): Handle complex numbers.
     -- TODO(fmayle): The python code makes dz a control dependency of the 2*x
@@ -685,6 +689,7 @@ numOutputs o =
         "Add" -> 1
         "Cast" -> 1
         "Const" -> 1
+        "Concat" -> 1
         "Conv2D" -> 1
         "Div" -> 1
         "DynamicStitch" -> 1
