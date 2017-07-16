@@ -176,6 +176,7 @@ Test-Suite GradientTest
                , proto-lens
                , lens-family
                , google-shim
+               , random
                , tensorflow
                , tensorflow-core-ops
                , tensorflow-ops

@@ -16,8 +16,10 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+import Control.Monad(forM, replicateM)
 import Data.Int (Int32)
 import Data.List (sort)
+import qualified Data.List as List
 import Data.ProtoLens.TextFormat (showMessage)
 import Google.Test (googleTest)
 import Lens.Family2 ((^..))
@@ -25,6 +27,7 @@ import Test.Framework (Test)
 import Test.Framework.Providers.HUnit (testCase)
 import Test.HUnit ((@=?))
 import qualified Data.Vector as V
+import System.Random (randomIO)
 
 import qualified TensorFlow.Core as TF
 import qualified TensorFlow.GenOps.Core as TF (max)
@@ -176,6 +179,27 @@ testConcatGradient = testCase "testConcatGradient" $ do
     V.fromList [2,2,2,2 :: Float] @=? dv    
     V.fromList [1,1,1,1 :: Float] @=? dv'
 
+-- This test checks that ...
+--   similar to
+-- tensorflow/tensorflow/compiler/tests/concat_ops_test.py 
+--  ConcatTest._testGradientsSimple
+testConcatGradientSimple :: Test
+testConcatGradientSimple = testCase "testConcatGradientSimple" $ do
+    let shapes     = [[x,10,2] | x <- [1,2,6]]
+        _foldl f (x:xs) = foldl f x xs
+    (inputGrads :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    (inputs :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    dinputs <- TF.runSession $ do
+        inputTensors <- forM (inputs `zip` shapes) $ \(input,shape) -> 
+                          TF.render $ TF.constant (TF.Shape shape) input
+        inputGradTensor <- TF.render $ TF.constant (TF.Shape [9,10,2]) $ concat inputGrads
+        inputTensor <- TF.render $ TF.concat (TF.scalar 0) inputTensors
+        output <- TF.render $ inputTensor `TF.mul` inputGradTensor
+        TF.gradients output inputTensors >>= TF.run
+    (V.fromList <$> inputGrads) @=? dinputs
+
 main :: IO ()
 main = googleTest [ testGradientSimple
                   , testGradientDisconnected
@@ -184,4 +208,143 @@ main = googleTest [ testGradientSimple
                   , testDiamond
                   , testMaxGradient
                   , testConcatGradient
+                  , testConcatGradientSimple
                   ]
+
+--  def _testGradientsSimple(self):
+--    with self.test_session():
+--      inp = []
+--      inp_tensors = []
+--      with self.test_scope():
+--        for x in [1, 2, 6]:
+--          shape = [10, x, 2]
+--          t = np.random.rand(*shape).astype("f") 
+--          inp.append(t)
+--          inp_tensors.append(
+--              constant_op.constant(
+--                  [float(y) for y in t.flatten()],
+--                  shape=shape,      
+--                  dtype=dtypes.float32))          <----------------------- inp_tensors
+--        c = array_ops.concat(inp_tensors, 1)      <----------------------- tf.concat inp_tensors
+--        output_shape = [10, 9, 2]
+--        grad_inp = np.random.rand(*output_shape).astype("f")
+--        grad_tensor = constant_op.constant(
+--            [float(x) for x in grad_inp.flatten()], shape=output_shape)
+--        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
+--        concated_grad = array_ops.concat(grad, 1)
+--      result = concated_grad.eval()
+--    self.assertAllEqual(result, grad_inp)
+--
+--
+--  def _testGradientsFirstDim(self):
+--    with self.test_session():
+--      inp = []
+--      inp_tensors = []
+--      with self.test_scope():
+--        for x in [1, 2, 6]:
+--          shape = [x, 10, 2]
+--          t = np.random.rand(*shape).astype("f")
+--          inp.append(t)
+--          inp_tensors.append(
+--              constant_op.constant(
+--                  [float(y) for y in t.flatten()],
+--                  shape=shape,
+--                  dtype=dtypes.float32))
+--        c = array_ops.concat(inp_tensors, 0)
+--        output_shape = [9, 10, 2]
+--        grad_inp = np.random.rand(*output_shape).astype("f")
+--        grad_tensor = constant_op.constant(
+--            [float(x) for x in grad_inp.flatten()], shape=output_shape)
+--        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
+--        concated_grad = array_ops.concat(grad, 0)
+--        result = concated_grad.eval()
+--
+--    self.assertAllEqual(result, grad_inp)
+--
+--  def _testGradientsLastDim(self):
+--    with self.test_session():
+--      inp = []
+--      inp_tensors = []
+--      with self.test_scope():
+--        for x in [1, 2, 6]:
+--          shape = [10, 2, x]
+--          t = np.random.rand(*shape).astype("f")
+--          inp.append(t)
+--          inp_tensors.append(
+--              constant_op.constant(
+--                  [float(y) for y in t.flatten()],
+--                  shape=shape,
+--                  dtype=dtypes.float32))
+--        c = array_ops.concat(inp_tensors, 2)
+--        output_shape = [10, 2, 9]
+--        grad_inp = np.random.rand(*output_shape).astype("f")
+--        grad_tensor = constant_op.constant(
+--            [float(x) for x in grad_inp.flatten()], shape=output_shape)
+--        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
+--        concated_grad = array_ops.concat(grad, 2)
+--        result = concated_grad.eval()
+--
+--    self.assertAllEqual(result, grad_inp)
+--
+--  def _RunAndVerifyGradientsRandom(self):
+--    # Random dims of rank 5
+--    input_shape = np.random.randint(1, 5, size=5)
+--    # Random number of tensors
+--    num_tensors = np.random.randint(1, 10)
+--    # Random dim to concat on
+--    concat_dim = np.random.randint(5)
+--    concat_dim_sizes = np.random.randint(1, 5, size=num_tensors)
+--    with self.test_session():
+--      inp = []
+--      inp_tensors = []
+--      with self.test_scope():
+--        for x in concat_dim_sizes:
+--          shape = input_shape
+--          shape[concat_dim] = x
+--          t = np.random.rand(*shape).astype("f")
+--          inp.append(t)
+--          inp_tensors.append(
+--              constant_op.constant(
+--                  [float(y) for y in t.flatten()],
+--                  shape=shape,
+--                  dtype=dtypes.float32))
+--        c = array_ops.concat(inp_tensors, concat_dim)
+--        output_shape = input_shape
+--        output_shape[concat_dim] = concat_dim_sizes.sum()
+--        grad_inp = np.random.rand(*output_shape).astype("f")
+--        grad_tensor = constant_op.constant(
+--            [float(x) for x in grad_inp.flatten()], shape=output_shape)
+--        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
+--        concated_grad = array_ops.concat(grad, concat_dim)
+--        result = concated_grad.eval()
+--
+--    self.assertAllEqual(result, grad_inp)
+--
+--  def testGradientsRandom(self):
+--    for _ in range(5):
+--      self._RunAndVerifyGradientsRandom()
+--
+--  # Re-enable once zero-element Retvals are handled correctly.
+--  def DISABLED_testZeroSize(self):
+--    # Verify that concat doesn't crash and burn for zero size inputs
+--    np.random.seed(7)
+--    with self.test_session() as sess:
+--      with self.test_scope():
+--        for shape0 in (), (2,):
+--          axis = len(shape0)
+--          for shape1 in (), (3,):
+--            for n0 in 0, 1, 2:
+--              for n1 in 0, 1, 2:
+--                x0 = np.random.randn(*(shape0 + (n0,) + shape1))
+--                x1 = np.random.randn(*(shape0 + (n1,) + shape1))
+--                correct = np.concatenate([x0, x1], axis=axis)
+--                # TODO(irving): Make tf.concat handle map, then drop list().
+--                xs = list(map(constant_op.constant, [x0, x1]))
+--                c = array_ops.concat(xs, axis)
+--                self.assertAllEqual(c.eval(), correct)
+--                # Check gradients
+--                dc = np.random.randn(*c.get_shape().as_list())
+--                dxs = sess.run(gradients_impl.gradients(c, xs, dc))
+--                self.assertAllEqual(dc, np.concatenate(dxs, axis=axis))
+
+
