@@ -442,16 +442,20 @@ opGrad "Neg" _ [_] [dz] = [Just $ negate $ expr dz]
 opGrad "Relu" _ [toT -> x] [dz] = [Just $ reluGrad dz x]
 
 opGrad "Concat" nodedef inputs [dz]
-  = [Nothing] ++ map Just (splitDzs `reshapeZip` inputShapes)
+ | length inputs == 1 = Nothing : [Just $ expr dz]
+ | otherwise          = Nothing : map Just (splitDzs `reshapeZip` inputShapes)
    where _inputGrad (toT -> x) = CoreOps.exp $ zerosLike x
          inputShapes :: [Tensor Build Int32]
          inputShapes = map _shape $ tail inputs
          _shape (toT -> x) = shape (x :: Tensor Build a)
          _reshape op = reshape op (constant (Shape [1 :: Int64]) [1 :: Int32])
          _sizes :: Tensor Build Int32
-         _sizes = CoreOps.concat (scalar 0) $ map (\x ->  _reshape $ CoreOps.prod x (scalar (0 :: Int32))) inputShapes
-         splitDzs = CoreOps.splitV (fromIntegral $ length $ tail inputs) 
-                           (reshape dz (constant (Shape [1 :: Int64]) [-1 :: Int32])) _sizes (scalar 0)
+         -- _sizes = CoreOps.concat (scalar 0) $ map (\x ->  _reshape $ CoreOps.prod x (scalar (0 :: Int32))) inputShapes
+         one       = constant (Shape [1 :: Int64]) [1 :: Int32]
+         concatDim = reshape (toT $ head inputs) (constant (Shape [1 :: Int64]) [-1 :: Int32])
+         _sizes   = CoreOps.concat (scalar 0) $ map (\t -> CoreOps.slice t concatDim one) inputShapes
+         splitDzs = CoreOps.splitV (fromIntegral $ length $ tail inputs) dz _sizes (toT $ head inputs)
+                         --  (reshape dz (constant (Shape [1 :: Int64]) [-1 :: Int32])) _sizes (scalar 0)
          reshapeZip = zipWith reshape
 
 opGrad "Square" _ [toT -> x] [dz] =

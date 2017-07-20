@@ -16,8 +16,8 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-import Control.Monad(forM, replicateM)
-import Data.Int (Int32)
+import Control.Monad(forM, forM_, replicateM)
+import Data.Int (Int32,Int64)
 import Data.List (sort)
 import qualified Data.List as List
 import Data.ProtoLens.TextFormat (showMessage)
@@ -179,12 +179,40 @@ testConcatGradient = testCase "testConcatGradient" $ do
     V.fromList [2,2,2,2 :: Float] @=? dv    
     V.fromList [1,1,1,1 :: Float] @=? dv'
 
+-- TODO(JAK): - remove _foldl 
+--            - hlint
+--            - remove rnd
+-- TODO(JAK): description ...
 -- This test checks that ...
 --   similar to
 -- tensorflow/tensorflow/compiler/tests/concat_ops_test.py 
 --  ConcatTest._testGradientsSimple
 testConcatGradientSimple :: Test
 testConcatGradientSimple = testCase "testConcatGradientSimple" $ do
+    let shapes     = [[10,x,2] | x <- [1,2,6]]
+        _foldl f (x:xs) = foldl f x xs
+    (inputGrads :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    (inputs :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    dinputs <- TF.runSession $ do
+        inputTensors <- forM (inputs `zip` shapes) $ \(input,shape) -> 
+                          TF.render $ TF.constant (TF.Shape shape) input
+        inputGradTensors <- forM (inputGrads `zip` shapes) $ \(inputGrad, shape) -> 
+                               TF.render $ TF.constant (TF.Shape shape) inputGrad
+        inputGradTensor <- TF.render $ TF.concat (TF.scalar 1) inputGradTensors
+        inputTensor <- TF.render $ TF.concat (TF.scalar 1) inputTensors
+        output <- TF.render $ inputTensor `TF.mul` inputGradTensor
+        TF.gradients output inputTensors >>= TF.run
+    (V.fromList <$> inputGrads) @=? dinputs
+
+-- TODO(JAK): description ...
+-- This test checks that ...
+--   similar to
+-- tensorflow/tensorflow/compiler/tests/concat_ops_test.py 
+--  ConcatTest._testGradientsSimple
+testConcatGradientFirstDim :: Test
+testConcatGradientFirstDim = testCase "testConcatGradientFirstDim" $ do
     let shapes     = [[x,10,2] | x <- [1,2,6]]
         _foldl f (x:xs) = foldl f x xs
     (inputGrads :: [[Float]]) <- forM shapes $ \shape ->
@@ -194,11 +222,72 @@ testConcatGradientSimple = testCase "testConcatGradientSimple" $ do
     dinputs <- TF.runSession $ do
         inputTensors <- forM (inputs `zip` shapes) $ \(input,shape) -> 
                           TF.render $ TF.constant (TF.Shape shape) input
-        inputGradTensor <- TF.render $ TF.constant (TF.Shape [9,10,2]) $ concat inputGrads
+        inputGradTensors <- forM (inputGrads `zip` shapes) $ \(inputGrad, shape) -> 
+                               TF.render $ TF.constant (TF.Shape shape) inputGrad
+        inputGradTensor <- TF.render $ TF.concat (TF.scalar 0) inputGradTensors
         inputTensor <- TF.render $ TF.concat (TF.scalar 0) inputTensors
         output <- TF.render $ inputTensor `TF.mul` inputGradTensor
         TF.gradients output inputTensors >>= TF.run
     (V.fromList <$> inputGrads) @=? dinputs
+
+-- TODO(JAK): description ...
+-- This test checks that ...
+--   similar to
+-- tensorflow/tensorflow/compiler/tests/concat_ops_test.py 
+--  ConcatTest._testGradientsSimple
+testConcatGradientLastDim :: Test
+testConcatGradientLastDim = testCase "testConcatGradientLastDim" $ do
+    let shapes     = [[10,2,x] | x <- [1,2,6]]
+        _foldl f (x:xs) = foldl f x xs
+    (inputGrads :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    (inputs :: [[Float]]) <- forM shapes $ \shape ->
+       replicateM (List.product shape) randomIO
+    dinputs <- TF.runSession $ do
+        inputTensors <- forM (inputs `zip` shapes) $ \(input,shape) -> 
+                          TF.render $ TF.constant (TF.Shape shape) input
+        inputGradTensors <- forM (inputGrads `zip` shapes) $ \(inputGrad, shape) -> 
+                               TF.render $ TF.constant (TF.Shape shape) inputGrad
+        inputGradTensor <- TF.render $ TF.concat (TF.scalar 2) inputGradTensors
+        inputTensor <- TF.render $ TF.concat (TF.scalar 2) inputTensors
+        output <- TF.render $ inputTensor `TF.mul` inputGradTensor
+        TF.gradients output inputTensors >>= TF.run
+    (V.fromList <$> inputGrads) @=? dinputs
+
+
+testConcatRunAndVerifyGradientsRandom :: Test
+testConcatRunAndVerifyGradientsRandom = testCase "testConcatRunAndVerifyGradientsRandom" $ 
+    forM_ [1..5] $ \_ -> do
+      let rnd _min _max =  ((+ _min) . (`mod` (_max - _min))) <$> randomIO
+      (shapes' :: [Int64]) <- replicateM 5 $ rnd 1 5
+      (numTensors :: Int) <- rnd 1 10
+      (concatDim :: Int32) <- rnd 0 4
+      (concatDimSizes :: [Int64]) <- replicateM numTensors $ rnd 1 5
+      let concatDimSize = sum concatDimSizes
+          update i xs x = xs `go` [0..]
+            where go [] _ = []
+                  go (y:ys) (j:js) | i == j    = x:ys
+                                   | otherwise = y:go ys js
+          shapes = map (update concatDim shapes') concatDimSizes
+          wholeshape = update concatDim shapes' concatDimSize
+      print concatDim
+      print numTensors
+      forM_ shapes print 
+      let _foldl f (x:xs) = foldl f x xs
+      (inputGrads :: [[Float]]) <- forM shapes $ \shape ->
+         replicateM (fromIntegral $ List.product shape) randomIO
+      (inputs :: [[Float]]) <- forM shapes $ \shape ->
+         replicateM (fromIntegral $ List.product shape) randomIO
+      dinputs <- TF.runSession $ do
+          inputTensors <- forM (inputs `zip` shapes) $ \(input,shape) -> 
+                            TF.render $ TF.constant (TF.Shape shape) input
+          inputTensor <- TF.render $ TF.concat (TF.scalar concatDim) inputTensors
+          inputGradTensors <- forM (inputGrads `zip` shapes) $ \(inputGrad, shape) -> 
+                                 TF.render $ TF.constant (TF.Shape shape) inputGrad
+          inputGradTensor <- TF.render $ TF.concat (TF.scalar concatDim) inputGradTensors
+          output <- TF.render $ inputTensor `TF.mul` inputGradTensor
+          TF.gradients output inputTensors >>= TF.run
+      (V.fromList <$> inputGrads) @=? dinputs
 
 main :: IO ()
 main = googleTest [ testGradientSimple
@@ -209,82 +298,11 @@ main = googleTest [ testGradientSimple
                   , testMaxGradient
                   , testConcatGradient
                   , testConcatGradientSimple
+                  , testConcatGradientFirstDim
+                  , testConcatGradientLastDim
+                  , testConcatRunAndVerifyGradientsRandom
                   ]
 
---  def _testGradientsSimple(self):
---    with self.test_session():
---      inp = []
---      inp_tensors = []
---      with self.test_scope():
---        for x in [1, 2, 6]:
---          shape = [10, x, 2]
---          t = np.random.rand(*shape).astype("f") 
---          inp.append(t)
---          inp_tensors.append(
---              constant_op.constant(
---                  [float(y) for y in t.flatten()],
---                  shape=shape,      
---                  dtype=dtypes.float32))          <----------------------- inp_tensors
---        c = array_ops.concat(inp_tensors, 1)      <----------------------- tf.concat inp_tensors
---        output_shape = [10, 9, 2]
---        grad_inp = np.random.rand(*output_shape).astype("f")
---        grad_tensor = constant_op.constant(
---            [float(x) for x in grad_inp.flatten()], shape=output_shape)
---        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
---        concated_grad = array_ops.concat(grad, 1)
---      result = concated_grad.eval()
---    self.assertAllEqual(result, grad_inp)
---
---
---  def _testGradientsFirstDim(self):
---    with self.test_session():
---      inp = []
---      inp_tensors = []
---      with self.test_scope():
---        for x in [1, 2, 6]:
---          shape = [x, 10, 2]
---          t = np.random.rand(*shape).astype("f")
---          inp.append(t)
---          inp_tensors.append(
---              constant_op.constant(
---                  [float(y) for y in t.flatten()],
---                  shape=shape,
---                  dtype=dtypes.float32))
---        c = array_ops.concat(inp_tensors, 0)
---        output_shape = [9, 10, 2]
---        grad_inp = np.random.rand(*output_shape).astype("f")
---        grad_tensor = constant_op.constant(
---            [float(x) for x in grad_inp.flatten()], shape=output_shape)
---        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
---        concated_grad = array_ops.concat(grad, 0)
---        result = concated_grad.eval()
---
---    self.assertAllEqual(result, grad_inp)
---
---  def _testGradientsLastDim(self):
---    with self.test_session():
---      inp = []
---      inp_tensors = []
---      with self.test_scope():
---        for x in [1, 2, 6]:
---          shape = [10, 2, x]
---          t = np.random.rand(*shape).astype("f")
---          inp.append(t)
---          inp_tensors.append(
---              constant_op.constant(
---                  [float(y) for y in t.flatten()],
---                  shape=shape,
---                  dtype=dtypes.float32))
---        c = array_ops.concat(inp_tensors, 2)
---        output_shape = [10, 2, 9]
---        grad_inp = np.random.rand(*output_shape).astype("f")
---        grad_tensor = constant_op.constant(
---            [float(x) for x in grad_inp.flatten()], shape=output_shape)
---        grad = gradients_impl.gradients([c], inp_tensors, [grad_tensor])
---        concated_grad = array_ops.concat(grad, 2)
---        result = concated_grad.eval()
---
---    self.assertAllEqual(result, grad_inp)
 --
 --  def _RunAndVerifyGradientsRandom(self):
 --    # Random dims of rank 5
@@ -320,9 +338,6 @@ main = googleTest [ testGradientSimple
 --
 --    self.assertAllEqual(result, grad_inp)
 --
---  def testGradientsRandom(self):
---    for _ in range(5):
---      self._RunAndVerifyGradientsRandom()
 --
 --  # Re-enable once zero-element Retvals are handled correctly.
 --  def DISABLED_testZeroSize(self):
