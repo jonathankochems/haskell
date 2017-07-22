@@ -408,26 +408,27 @@ transAttrs a b =
   (TF.opAttr "transpose_a" .~ a) . (TF.opAttr "transpose_b" .~ b)
 
 main :: IO ()
-main = googleTest [ testGradientSimple
-                  , testGradientDisconnected
-                  , testCreateGraphStateful
-                  , testCreateGraphNameScopes
-                  , testDiamond
-                  , testMaxGradient
-                  , testConcatGradient
-                  , testConcatGradientSimple
-                  , testConcatGradientFirstDim
-                  , testConcatGradientLastDim
-                  , testConcatRunAndVerifyGradientsRandom
-                  , testReluGrad
-                  , testReluGradGrad
-                  , testFillGrad
-                  , testTileGrad
-                  , testTile2DGrad
-                  , matMulGradient
-                  , matMulGradGrad
-                  , matMulTransposeGradient (False, False)
-                  , matMulTransposeGradient (False, True)
-                  , matMulTransposeGradient (True, False)
-                  , matMulTransposeGradient (True, True)
-                  ]
+main = defaultMain
+            [ testGradientSimple
+            , testGradientDisconnected
+            , testCreateGraphStateful
+            , testCreateGraphNameScopes
+            , testDiamond
+            , testMaxGradient
+            , testConcatGradient
+            , testConcatGradientSimple
+            , testConcatGradientFirstDim
+            , testConcatGradientLastDim
+            , testConcatRunAndVerifyGradientsRandom
+            , testReluGrad
+            , testReluGradGrad
+            , testFillGrad
+            , testTileGrad
+            , testTile2DGrad
+            , matMulGradient
+            , matMulGradGrad
+            , matMulTransposeGradient (False, False)
+            , matMulTransposeGradient (False, True)
+            , matMulTransposeGradient (True, False)
+            , matMulTransposeGradient (True, True)
+            ]
