@@ -181,7 +181,7 @@ testConcatGradient = testCase "testConcatGradient" $ do
         v' <- TF.render $ TF.vector [5,6,7,8 :: Float]
         let y = TF.concat (TF.scalar 0) [ v, v', v ]
         TF.gradients y [v,v'] >>= TF.run
-    V.fromList [2,2,2,2 :: Float] @=? dv 
+    V.fromList [2,2,2,2 :: Float] @=? dv
     V.fromList [1,1,1,1 :: Float] @=? dv'
 
 -- This test checks that the gradient of a concat op
