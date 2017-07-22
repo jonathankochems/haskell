@@ -444,19 +444,19 @@ opGrad "Neg" _ [_] [dz] = [Just $ negate $ expr dz]
 opGrad "Relu" _ [toT -> x] [dz] = [Just $ reluGrad dz x]
 opGrad "ReluGrad" _ [_, toT -> x ] [dz] = [Just $ reluGrad dz x, Just $ CoreOps.zerosLike x]
 
--- Concat concatenates input tensors 
+-- Concat concatenates input tensors
 --   x1 of shape s1 = [d1, ..., di_1, ..., dn]
 --   x2 of shape s2 = [d1, ..., di_2, ..., dn]
 --    .           .     .          .        .
 --    .           .     .          .        .
 --    .           .     .          .        .
 --   xm of shape sm = [d1, ..., di_m, ..., dn]
---  along dimension i to an output tensor 
---   y  of shape sy = [d1, ..., d, ..., dn] 
+--  along dimension i to an output tensor
+--   y  of shape sy = [d1, ..., d, ..., dn]
 --  where d = sum di = sum [di_1,...,di_m]
---  
+--
 --  The incoming gradient from backpropagation is
---   simply forwarded split across input tensors. 
+--   simply forwarded split across input tensors.
 --   Forwarded gradients have shapes s = [s1, ..., sm].
 opGrad "Concat" nodedef _ix [dy]
  | length x == 1 = Nothing : [Just $ expr dy]
@@ -464,7 +464,7 @@ opGrad "Concat" nodedef _ix [dy]
    where x  :: [Tensor Build a]
          x  = map toT $ tail _ix
          _i = toT $ head _ix
-         i  = reshape _i one 
+         i  = reshape _i one
          n  = length x
          s  :: [Tensor Build Int32]
          s  = map shape x
