@@ -17,7 +17,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 
-import Data.Int (Int32,Int64)
+import Data.Int (Int32, Int64)
 import Data.List (sort)
 import qualified Data.List as List
 import Data.ProtoLens.TextFormat (showMessage)
@@ -27,7 +27,7 @@ import Lens.Family2 ((^..), (.~))
 import Test.Framework.Providers.HUnit (testCase)
 import Test.HUnit ((@=?), assertEqual)
 import qualified Data.Vector as V
-import System.Random (randomIO,randomRIO)
+import System.Random (randomIO, randomRIO)
 import Control.Monad(forM, forM_, replicateM)
 import Control.Monad.IO.Class (liftIO)
 
