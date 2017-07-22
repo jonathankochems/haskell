@@ -106,6 +106,8 @@ module TensorFlow.Ops
     , CoreOps.range
     , CoreOps.range'
     , reducedShape
+    , reduceMean
+    , reduceMean'
     , CoreOps.relu
     , CoreOps.relu'
     , CoreOps.reluGrad
@@ -133,6 +135,8 @@ module TensorFlow.Ops
     , CoreOps.sub'
     , CoreOps.sum
     , CoreOps.sum'
+    , reduceSum
+    , reduceSum'
     , CoreOps.transpose
     , CoreOps.transpose'
     , truncatedNormal
@@ -239,8 +243,8 @@ zeroInitializedVariable'
 zeroInitializedVariable' params = initializedVariable' params . zeros
 
 -- TODO: Support heterogeneous list of tensors.
-save :: forall a m v . (Rendered v, MonadBuild m, TensorType a)
-        => ByteString     -- ^ File path.
+save :: forall a m v . (Rendered (Tensor v), MonadBuild m, TensorType a)
+        => ByteString    -- ^ File path.
         -> [Tensor v a]  -- ^ Tensors to save.
         -> m ControlNode
 save path xs = build $ do
@@ -314,6 +318,36 @@ scalarize t = CoreOps.reshape t (vector scalarShape)
     where
         scalarShape = [] :: [Int32]
 
+-- | Sum a tensor down to a scalar
+-- Seee `TensorFlow.GenOps.Core.sum`
+reduceSum :: (OneOf '[ Double, Float, Int32, Int64
+                     , Complex Float, Complex Double] a) =>
+             Tensor v a -> Tensor Build a
+reduceSum x = CoreOps.sum x allAxes
+  where allAxes = CoreOps.range 0 (CoreOps.rank x :: Tensor Build Int32) 1
+
+reduceSum' :: (OneOf '[ Double, Float, Int32, Int64
+                      , Complex Float, Complex Double] a) =>
+              OpParams -> Tensor v a -> Tensor Build a
+reduceSum' params x = CoreOps.sum' params x allAxes
+  where allAxes = CoreOps.range 0 (CoreOps.rank x :: Tensor Build Int32) 1
+
+-- | Computes the mean of elements across dimensions of a tensor.
+-- See `TensorFlow.GenOps.Core.mean`
+reduceMean
+  :: ( TensorType a
+     , OneOf '[ Double, Float, Complex Float, Complex Double] a
+     )
+  => Tensor v a -> Tensor Build a
+reduceMean = reduceMean' id
+
+reduceMean'
+  :: ( TensorType a
+     , OneOf '[ Double, Float, Complex Float, Complex Double] a
+     )
+  => OpParams -> Tensor v a -> Tensor Build a
+reduceMean' params x = CoreOps.mean' params x allAxes
+  where allAxes = CoreOps.range 0 (CoreOps.rank x :: Tensor Build Int32) 1
 
 -- | Create a constant vector.
 vector :: TensorType a => [a] -> Tensor Build a
@@ -330,7 +364,7 @@ scalar' :: TensorType a => OpParams -> a -> Tensor Build a
 scalar' params x = constant' params [] [x]
 
 -- | Random tensor from the unit normal distribution with bounded values.
--- 
+--
 -- This is a type-restricted version of 'TensorFlow.GenOps.Core.truncatedNormal'.
 truncatedNormal :: (MonadBuild m, OneOf '[Word16, Double, Float] a)
                 => Tensor v Int64  -- ^ Shape.

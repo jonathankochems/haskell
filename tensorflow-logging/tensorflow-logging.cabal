@@ -4,6 +4,7 @@ synopsis:            TensorBoard related functionality.
 description:         Please see README.md
 homepage:            https://github.com/tensorflow/haskell#readme
 license:             Apache
+license-file:        LICENSE
 author:              TensorFlow authors
 maintainer:          tensorflow-haskell@googlegroups.com
 copyright:           Google Inc.
@@ -54,6 +55,7 @@ Test-Suite LoggingTest
                , proto-lens
                , resourcet
                , temporary
+               , tensorflow
                , tensorflow-logging
                , tensorflow-proto
                , tensorflow-records-conduit
