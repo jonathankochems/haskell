@@ -441,22 +441,35 @@ opGrad "Abs" _ [toT -> x] [dz] = [Just $ expr dz * signum x]
 opGrad "Neg" _ [_] [dz] = [Just $ negate $ expr dz]
 opGrad "Relu" _ [toT -> x] [dz] = [Just $ reluGrad dz x]
 
-opGrad "Concat" nodedef inputs [dz]
- | length inputs == 1 = Nothing : [Just $ expr dz]
- | otherwise          = Nothing : map Just (splitDzs `reshapeZip` inputShapes)
-   where _inputGrad (toT -> x) = CoreOps.exp $ zerosLike x
-         inputShapes :: [Tensor Build Int32]
-         inputShapes = map _shape $ tail inputs
-         _shape (toT -> x) = shape (x :: Tensor Build a)
-         _reshape op = reshape op (constant (Shape [1 :: Int64]) [1 :: Int32])
-         _sizes :: Tensor Build Int32
-         -- _sizes = CoreOps.concat (scalar 0) $ map (\x ->  _reshape $ CoreOps.prod x (scalar (0 :: Int32))) inputShapes
-         one       = constant (Shape [1 :: Int64]) [1 :: Int32]
-         concatDim = reshape (toT $ head inputs) (constant (Shape [1 :: Int64]) [-1 :: Int32])
-         _sizes   = CoreOps.concat (scalar 0) $ map (\t -> CoreOps.slice t concatDim one) inputShapes
-         splitDzs = CoreOps.splitV (fromIntegral $ length $ tail inputs) dz _sizes (toT $ head inputs)
-                         --  (reshape dz (constant (Shape [1 :: Int64]) [-1 :: Int32])) _sizes (scalar 0)
+-- Concat concatenates input tensors 
+--   x1 of shape s1 = [d1, ..., di_1, ..., dn]
+--   x2 of shape s2 = [d1, ..., di_2, ..., dn]
+--    .           .     .          .        .
+--    .           .     .          .        .
+--    .           .     .          .        .
+--   xm of shape sm = [d1, ..., di_m, ..., dn]
+--  along dimension i to an output tensor 
+--   y  of shape sy = [d1, ..., d, ..., dn] 
+--  where d = sum di = sum [di_1,...,di_m]
+--  
+--  The incoming gradient from backpropagation is
+--   simply forwarded split across input tensors. 
+--   Forwarded gradients have shapes s = [s1, ..., sm].
+opGrad "Concat" nodedef _ix [dy]
+ | length x == 1 = Nothing : [Just $ expr dy]
+ | otherwise     = Nothing : map Just (dx `reshapeZip` s)
+   where x  :: [Tensor Build a]
+         x  = map toT $ tail _ix
+         _i = toT $ head _ix
+         i  = reshape _i one 
+         n  = length x
+         s  :: [Tensor Build Int32]
+         s  = map shape x
+         di :: Tensor Build Int32
+         di = CoreOps.concat (scalar 0) $ map (\t -> CoreOps.slice t i one) s
+         dx = CoreOps.splitV (fromIntegral n) dy di _i
          reshapeZip = zipWith reshape
+         one = constant (Shape [1 :: Int64]) [1 :: Int32]
 
 opGrad "Square" _ [toT -> x] [dz] =
     -- TODO(fmayle): Handle complex numbers.
